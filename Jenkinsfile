@@ -1,40 +1,28 @@
-import groovy.json.JsonSlurper
+pipeline {
+    agent any
 
-def getFtpPublishProfile(def publishProfilesJson) {
-  def pubProfiles = new JsonSlurper().parseText(publishProfilesJson)
-  for (p in pubProfiles)
-    if (p['publishMethod'] == 'FTP')
-      return [url: p.publishUrl, username: p.userName, password: p.userPWD]
+    environment {
+        AZURE_SUBSCRIPTION_ID = '880680d2-eb30-43fd-b0ac-182a0895c2bc'
+        AZURE_TENANT_ID = 'a576191b-c45b-4921-972e-159cc6de691a'
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                sh 'mvn clean package'
+            }
+        }
+
+        stage('Deploy to Azure') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'AzureServicePrincipal', passwordVariable: 'AZURE_CLIENT_SECRET', usernameVariable: 'AZURE_CLIENT_ID')]) {
+                    sh '''
+                        az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID
+                        az webapp deploy --resource-group jenkins-get-started-rg --name MTG --src-path target/calculator-1.0.war --type war
+                    '''
+                }
+            }
+        }
+    }
 }
 
-node {
-  withEnv(['AZURE_SUBSCRIPTION_ID=880680d2-eb30-43fd-b0ac-182a0895c2bc',
-        'AZURE_TENANT_ID=a576191b-c45b-4921-972e-159cc6de691a']) {
-    stage('init') {
-      checkout scm
-    }
-  
-    stage('build') {
-      sh 'mvn clean package'
-    }
-  
-    stage('deploy') {
-      def resourceGroup = 'jenkins-get-started-rg'
-      def webAppName = 'MTG'
-      // login Azure
-      withCredentials([usernamePassword(credentialsId: 'AzureServicePrincipal', passwordVariable: 'AZURE_CLIENT_SECRET', usernameVariable: 'AZURE_CLIENT_ID')]) {
-       sh '''
-          az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET -t $AZURE_TENANT_ID
-          az account set -s $AZURE_SUBSCRIPTION_ID
-        '''
-      }
-      // get publish settings
-      def pubProfilesJson = sh script: "az webapp deployment list-publishing-profiles -g $resourceGroup -n $webAppName", returnStdout: true
-      def ftpProfile = getFtpPublishProfile pubProfilesJson
-      // upload package
-      sh "az webapp deploy --resource-group jenkins-get-started-rg --name MTG --src-path target/calculator-1.0.war --type war"
-      // log out
-      sh 'az logout'
-    }
-  }
-}
